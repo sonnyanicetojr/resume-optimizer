@@ -70,4 +70,7 @@ Your resume text and the job description are sent to OpenRouter and on to the mo
 ## Notes
 
 - Always read the tailored CV before sending it. The model is told not to fabricate, but you are responsible for what you submit.
-- `search.py` is a throwaway helper script used during development and isn't part of the app.
+
+## License
+
+[MIT](LICENSE)
