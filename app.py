@@ -2,6 +2,7 @@ import os
 import json
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -22,9 +23,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ---------------------------------------------------------------------------
-# Session State
-# ---------------------------------------------------------------------------
 for key, default in {
     "tailored_cv": None,
     "output_docx": None,
@@ -41,14 +39,13 @@ for key, default in {
     "generating": False,
     "gen_elapsed": 0.0,
     "theme": "light",
+    "job": None,
+    "job_error": None,
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 def go_to(step):
     st.session_state.step = step
 
@@ -76,13 +73,76 @@ def toggle_theme():
     st.session_state.theme = "dark" if st.session_state.theme == "light" else "light"
 
 
+@st.cache_resource
+def _executor() -> ThreadPoolExecutor:
+    return ThreadPoolExecutor(max_workers=4)
+
+
+def start_job(kind: str, **kwargs):
+    """Run tailor_resume() in a background thread.
+
+    Streamlit reruns the script on every widget interaction, which would abort an
+    inline LLM call. A thread survives reruns; finish_job() collects the result.
+    """
+    st.session_state.job_error = None
+    st.session_state.job = {
+        "kind": kind,
+        "future": _executor().submit(tailor_resume, **kwargs),
+        "start": time.time(),
+        "model": kwargs["model"],
+        "api_key": kwargs["api_key"],
+    }
+
+
+def finish_job():
+    job = st.session_state.job
+    if job is None or not job["future"].done():
+        return
+    st.session_state.job = None
+    try:
+        result = job["future"].result()
+    except ValueError as e:
+        st.session_state.job_error = f"Validation Error: {e}"
+        return
+    except Exception as e:
+        st.session_state.job_error = f"Error: {e}"
+        return
+
+    elapsed = time.time() - job["start"]
+    if job["kind"] == "generate":
+        st.session_state.original_text = st.session_state.resume_text
+        st.session_state.model_id = job["model"]
+        st.session_state.used_api_key = job["api_key"]
+        save_outputs(result)
+        st.session_state.gen_elapsed = elapsed
+        go_to(4)
+    else:  # revise
+        save_outputs(result)
+        st.session_state.gen_elapsed = elapsed
+        st.session_state.revision_count = st.session_state.get("revision_count", 0) + 1
+
+
+@st.fragment(run_every=1)
+def job_status():
+    """Poll the running job without rerunning the whole page."""
+    job = st.session_state.job
+    if job is None:
+        return
+    if job["future"].done():
+        st.rerun(scope="app")  # main script picks up the result via finish_job()
+    elapsed = time.time() - job["start"]
+    label = "Revising your CV" if job["kind"] == "revise" else "Tailoring your CV"
+    st.caption(f"{label}… {elapsed:.0f}s")
+
+
+def show_job_error():
+    if st.session_state.job_error:
+        st.error(st.session_state.job_error)
+
+
 is_dark = st.session_state.theme == "dark"
 
-# ---------------------------------------------------------------------------
-# Modernist design system — tokens from the claude.ai/design "Modernist"
-# project (styles.css / theme.json). Light is the system as designed; dark is
-# derived from the same tonal ramps (accent-400 on a dark ground, per its guide).
-# ---------------------------------------------------------------------------
+# Design tokens from the claude.ai/design "Modernist" project; dark is derived from the same ramps.
 LIGHT_TOKENS = {
     "bg": "#f2f4f7",
     "surface": "#e6eaf0",
@@ -461,7 +521,6 @@ st.markdown(
 
 
 def intro(kicker, title, desc):
-    """Step header: accent kicker, display title, flush-left lede, 2px rule below."""
     st.markdown(
         f"""<div class="intro">
     <span class="kicker">{kicker}</span>
@@ -480,9 +539,6 @@ def section_head(num, title):
 </div>"""
 
 
-# ---------------------------------------------------------------------------
-# NAVBAR
-# ---------------------------------------------------------------------------
 nav_left, nav_right = st.columns([4, 1], vertical_alignment="bottom")
 with nav_left:
     st.markdown(
@@ -502,13 +558,11 @@ with nav_right:
         use_container_width=True,
     )
 
-# ---------------------------------------------------------------------------
-# Determine effective step & readiness
-# ---------------------------------------------------------------------------
+finish_job()
+
 has_results = st.session_state.tailored_cv is not None
 current_step = st.session_state.step
 
-# Clamp step
 if has_results and current_step < 4:
     current_step = 4
 
@@ -516,9 +570,6 @@ s1_done = st.session_state.resume_loaded
 s2_done = st.session_state.jd_loaded
 s3_done = has_results
 
-# ---------------------------------------------------------------------------
-# STEPPER
-# ---------------------------------------------------------------------------
 def step_class(n, label=False):
     if has_results and n <= 3:
         return "done"
@@ -536,9 +587,7 @@ step_cells = "".join(
 )
 st.markdown(f'<div class="stepper">{step_cells}</div>', unsafe_allow_html=True)
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 1 — RESUME
-# ═══════════════════════════════════════════════════════════════════════════
+# Step 1 — Resume
 if current_step == 1:
     intro(
         "Step 01 / 03",
@@ -593,9 +642,7 @@ if current_step == 1:
             go_to(2)
             st.rerun()
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 2 — JOB DESCRIPTION
-# ═══════════════════════════════════════════════════════════════════════════
+# Step 2 — Job description
 elif current_step == 2:
     intro(
         "Step 02 / 03",
@@ -657,9 +704,7 @@ elif current_step == 2:
             go_to(3)
             st.rerun()
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 3 — REVIEW & GENERATE
-# ═══════════════════════════════════════════════════════════════════════════
+# Step 3 — Review & generate
 elif current_step == 3:
     intro(
         "Step 03 / 03",
@@ -701,11 +746,9 @@ elif current_step == 3:
         )
     with c2:
         # Model IDs verified against openrouter.ai/api/v1/models (2026-10-15).
-        # Grouped by vendor, newest first. Every Gemini entry has a
-        # "Google AI Studio" endpoint, which tailor_resume() pins for BYOK.
+        # Gemini entries use a Google AI Studio endpoint, which tailor_resume() pins for BYOK.
         model_options = {
             "Fusion": "openrouter/fusion",
-            # OpenAI
             "OpenAI — GPT-6.1 Sol Pro": "openai/gpt-6.1-sol-pro",
             "OpenAI — GPT-6.1 Sol": "openai/gpt-6.1-sol",
             "OpenAI — GPT-6 Astra Pro": "openai/gpt-6-astra-pro",
@@ -714,7 +757,6 @@ elif current_step == 3:
             "OpenAI — GPT-6 Luna": "openai/gpt-6-luna",
             "OpenAI — GPT-5.6 Terra": "openai/gpt-5.6-terra",
             "OpenAI — GPT-5.5": "openai/gpt-5.5",
-            # Google
             "Google — Gemini 4 Argon": "google/gemini-4-argon",
             "Google — Gemini 3.8 Flash": "google/gemini-3.8-flash",
             "Google — Gemini 3.7 Flash": "google/gemini-3.7-flash",
@@ -726,7 +768,6 @@ elif current_step == 3:
             "Google — Gemini 3.1 Flash Lite (preview)": "google/gemini-3.1-flash-lite-preview",
             "Google — Gemini 2.5 Pro": "google/gemini-2.5-pro",
             "Google — Gemini 2.5 Flash": "google/gemini-2.5-flash",
-            # Anthropic
             "Anthropic — Claude Fable 5.1": "anthropic/claude-fable-5.1",
             "Anthropic — Claude Fable 5": "anthropic/claude-fable-5",
             "Anthropic — Claude Opus 5.5": "anthropic/claude-opus-5.5",
@@ -736,29 +777,24 @@ elif current_step == 3:
             "Anthropic — Claude Sonnet 5.5": "anthropic/claude-sonnet-5.5",
             "Anthropic — Claude Sonnet 5": "anthropic/claude-sonnet-5",
             "Anthropic — Claude Haiku 5.5": "anthropic/claude-haiku-5.5",
-            # xAI / Meta / Mistral / Cohere
             "xAI — Grok 4.7": "x-ai/grok-4.7",
             "xAI — Grok 4.6": "x-ai/grok-4.6",
             "Meta — Muse Wonder": "meta/muse-wonder",
             "Meta — Muse Spark 1.3": "meta/muse-spark-1.3",
             "Mistral — Mistral Large 4": "mistralai/mistral-large-4-0",
             "Cohere — Command A+": "cohere/command-a-plus",
-            # DeepSeek
             "DeepSeek — V4 Pro 0813": "deepseek/deepseek-v4-pro-0813",
             "DeepSeek — V4.1 Flash": "deepseek/deepseek-v4.1-flash",
-            # Qwen
             "Qwen — Qwen3.8 Max Prime": "qwen/qwen3.8-max-prime",
             "Qwen — Qwen3.8 Max (0902)": "qwen/qwen3.8-max-0902",
             "Qwen — Qwen3.8 Flash": "qwen/qwen3.8-flash",
             "Qwen — Qwen3.7 Max": "qwen/qwen3.7-max",
             "Qwen — Qwen3.6 Plus": "qwen/qwen3.6-plus",
             "Qwen — Qwen3.5 397B-A17B": "qwen/qwen3.5-397b-a17b",
-            # Z-AI
             "Z-AI — GLM 5.3 Prime": "z-ai/glm-5.3-prime",
             "Z-AI — GLM 5.3": "z-ai/glm-5.3",
             "Z-AI — GLM 5.3 Flash": "z-ai/glm-5.3-flash",
             "Z-AI — GLM-5.2": "z-ai/glm-5.2",
-            # Moonshot / MiniMax / Xiaomi / StepFun / NVIDIA
             "Moonshot — Kimi K3": "moonshotai/kimi-k3",
             "Moonshot — Kimi K2.6": "moonshotai/kimi-k2.6",
             "MiniMax — M3": "minimax/minimax-m3",
@@ -776,9 +812,10 @@ elif current_step == 3:
         )
         model = model_options[selected_label]
 
+    busy = st.session_state.job is not None
     col_l, col_r = st.columns([1, 1])
     with col_l:
-        if st.button("Back", use_container_width=True):
+        if st.button("Back", use_container_width=True, disabled=busy):
             go_to(2)
             st.rerun()
     with col_r:
@@ -787,43 +824,25 @@ elif current_step == 3:
             "Generate tailored CV",
             type="primary",
             use_container_width=True,
-            disabled=not can_gen,
+            disabled=not can_gen or busy,
         ):
-            with st.spinner(""):
-                progress = st.progress(0, text="Sending to AI model…")
-                try:
-                    start = time.time()
-                    tailored_cv = tailor_resume(
-                        resume_text=st.session_state.resume_text,
-                        job_description=st.session_state.jd_text,
-                        api_key=api_key,
-                        model=model,
-                    )
-                    elapsed = time.time() - start
-                    progress.progress(50, text=f"AI responded in {elapsed:.1f}s — generating documents…")
+            start_job(
+                "generate",
+                resume_text=st.session_state.resume_text,
+                job_description=st.session_state.jd_text,
+                api_key=api_key,
+                model=model,
+            )
+            st.rerun()
 
-                    st.session_state.original_text = st.session_state.resume_text
-
-                    save_outputs(tailored_cv)
-                    st.session_state.model_id = model
-                    st.session_state.used_api_key = api_key
-                    st.session_state.gen_elapsed = elapsed
-                    progress.progress(100, text="Done")
-                    time.sleep(0.5)
-                    go_to(4)
-                    st.rerun()
-
-                except ValueError as e:
-                    st.error(f"Validation Error: {e}")
-                except Exception as e:
-                    st.error(f"Error: {e}")
+    if busy:
+        job_status()
+    show_job_error()
 
     if not can_gen:
         st.caption("Please provide your API key to generate.")
 
-# ═══════════════════════════════════════════════════════════════════════════
-# STEP 4 — RESULTS
-# ═══════════════════════════════════════════════════════════════════════════
+# Step 4 — Results
 elif current_step == 4 and has_results:
     tailored = st.session_state.tailored_cv
 
@@ -833,7 +852,6 @@ elif current_step == 4 and has_results:
         f"Generated in {st.session_state.gen_elapsed:.1f}s with {st.session_state.get('model_id', 'the selected model')}.",
     )
 
-    # Downloads
     dl1, dl2 = st.columns(2, gap="small")
     with dl1:
         st.markdown(
@@ -883,11 +901,9 @@ elif current_step == 4 and has_results:
 
     st.markdown("<div style='height:var(--space-6)'></div>", unsafe_allow_html=True)
 
-    # Tabs
     tab_preview, tab_json = st.tabs(["Preview", "JSON"])
 
     with tab_preview:
-        # Name + Contact
         name = tailored.get("name", "N/A")
         contact = tailored.get("contact", {})
         contact_parts = [contact.get(k, "") for k in ["email", "phone", "location", "linkedin", "other"] if contact.get(k)]
@@ -905,7 +921,6 @@ elif current_step == 4 and has_results:
 
         sec_no = 0
 
-        # Summary
         summary = tailored.get("professional_summary", "")
         if summary:
             sec_no += 1
@@ -915,7 +930,6 @@ elif current_step == 4 and has_results:
                 unsafe_allow_html=True,
             )
 
-        # Skills
         skills = tailored.get("skills", {})
         if skills:
             sec_no += 1
@@ -928,7 +942,6 @@ elif current_step == 4 and has_results:
                 unsafe_allow_html=True,
             )
 
-        # Experience
         experience = tailored.get("experience", [])
         if experience:
             sec_no += 1
@@ -948,7 +961,6 @@ elif current_step == 4 and has_results:
                 unsafe_allow_html=True,
             )
 
-        # Education
         education = tailored.get("education", [])
         if education:
             sec_no += 1
@@ -964,7 +976,6 @@ elif current_step == 4 and has_results:
                 unsafe_allow_html=True,
             )
 
-        # Certifications
         certs = tailored.get("certifications", [])
         if certs:
             sec_no += 1
@@ -980,7 +991,6 @@ elif current_step == 4 and has_results:
                 unsafe_allow_html=True,
             )
 
-        # Additional
         additional = tailored.get("additional_sections", {})
         for sec_name, content in additional.items():
             sec_no += 1
@@ -997,7 +1007,6 @@ elif current_step == 4 and has_results:
     with tab_json:
         st.json(tailored)
 
-    # Feedback / revision
     st.markdown(
         f"""<div class="section">{section_head(None, "Revise")}
         <p class="intro-desc" style="margin:var(--space-3) 0 var(--space-3);">Not quite right? Tell the AI what to change.</p></div>""",
@@ -1009,33 +1018,28 @@ elif current_step == 4 and has_results:
         placeholder="e.g. Make the summary shorter, emphasise Python over Java, drop the 2015 internship…",
         label_visibility="collapsed",
     )
+    revising = st.session_state.job is not None
     if st.button(
         "Revise CV",
         type="primary",
         use_container_width=True,
-        disabled=not feedback.strip(),
+        disabled=not feedback.strip() or revising,
     ):
-        with st.spinner("Revising your CV…"):
-            try:
-                start = time.time()
-                revised = tailor_resume(
-                    resume_text=st.session_state.resume_text,
-                    job_description=st.session_state.jd_text,
-                    api_key=st.session_state.get("used_api_key") or os.getenv("OPENROUTER_API_KEY", ""),
-                    model=st.session_state.get("model_id", "openrouter/fusion"),
-                    previous_cv=st.session_state.tailored_cv,
-                    feedback=feedback.strip(),
-                )
-                save_outputs(revised)
-                st.session_state.gen_elapsed = time.time() - start
-                st.session_state.revision_count = st.session_state.get("revision_count", 0) + 1
-                st.rerun()
-            except ValueError as e:
-                st.error(f"Validation Error: {e}")
-            except Exception as e:
-                st.error(f"Error: {e}")
+        start_job(
+            "revise",
+            resume_text=st.session_state.resume_text,
+            job_description=st.session_state.jd_text,
+            api_key=st.session_state.get("used_api_key") or os.getenv("OPENROUTER_API_KEY", ""),
+            model=st.session_state.get("model_id", "openrouter/fusion"),
+            previous_cv=st.session_state.tailored_cv,
+            feedback=feedback.strip(),
+        )
+        st.rerun()
 
-    # Start over
+    if revising:
+        job_status()
+    show_job_error()
+
     st.markdown("<div style='height:var(--space-4)'></div>", unsafe_allow_html=True)
     c1, c2 = st.columns([1, 3])
     with c1:
@@ -1053,6 +1057,8 @@ elif current_step == 4 and has_results:
                 "jd_loaded": False,
                 "jd_source_name": "",
                 "gen_elapsed": 0.0,
+                "job": None,
+                "job_error": None,
             }
             for k, v in reset_defaults.items():
                 st.session_state[k] = v
@@ -1064,9 +1070,6 @@ else:
     go_to(1)
     st.rerun()
 
-# ---------------------------------------------------------------------------
-# FOOTER
-# ---------------------------------------------------------------------------
 st.markdown(
     """
 <div class="footer"><b>CV Tailor</b> &nbsp;/&nbsp; Built with Streamlit, python-docx &amp; OpenRouter</div>
