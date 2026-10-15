@@ -1,0 +1,26 @@
+# Secrets — never commit (use .env.example as the template)
+.env
+
+# Generated output (tailored CVs contain personal data)
+output/*
+!output/.gitkeep
+
+# Personal source resumes
+*_Resume_*.docx
+*_Resume_*.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local tooling
+.kilo/
+.claude/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

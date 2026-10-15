@@ -1,0 +1,11 @@
+# Modernist design system (claude.ai/design project "Modernist") — base theme
+# for Streamlit's native widgets. app.py layers the full token set on top and
+# handles the dark-mode toggle.
+[theme]
+base = "light"
+primaryColor = "#1c3170"
+backgroundColor = "#f2f4f7"
+secondaryBackgroundColor = "#e6eaf0"
+textColor = "#0e1830"
+baseRadius = "none"
+font = "Archivo:https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap"
