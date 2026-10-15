@@ -41,6 +41,7 @@ for key, default in {
     "theme": "light",
     "job": None,
     "job_error": None,
+    "model_choice": ("Fusion", "Multi-model panel"),
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -138,6 +139,166 @@ def job_status():
 def show_job_error():
     if st.session_state.job_error:
         st.error(st.session_state.job_error)
+
+
+# Model IDs verified against openrouter.ai/api/v1/models (2026-10-15), newest first.
+# Gemini entries use a Google AI Studio endpoint, which tailor_resume() pins for BYOK.
+MODEL_CATALOG = {
+    "Fusion": {
+        "Multi-model panel": "openrouter/fusion",
+    },
+    "OpenAI": {
+        "GPT-6.1 Sol Pro": "openai/gpt-6.1-sol-pro",
+        "GPT-6.1 Sol": "openai/gpt-6.1-sol",
+        "GPT-6 Astra Pro": "openai/gpt-6-astra-pro",
+        "GPT-6 Astra": "openai/gpt-6-astra",
+        "GPT-6 Luna Pro": "openai/gpt-6-luna-pro",
+        "GPT-6 Luna": "openai/gpt-6-luna",
+        "GPT-5.6 Terra": "openai/gpt-5.6-terra",
+        "GPT-5.5": "openai/gpt-5.5",
+    },
+    "Anthropic": {
+        "Fable 5.1": "anthropic/claude-fable-5.1",
+        "Fable 5": "anthropic/claude-fable-5",
+        "Opus 5.5": "anthropic/claude-opus-5.5",
+        "Opus 5": "anthropic/claude-opus-5",
+        "Opus 4.8": "anthropic/claude-opus-4.8",
+        "Opus 4.7": "anthropic/claude-opus-4.7",
+        "Sonnet 5.5": "anthropic/claude-sonnet-5.5",
+        "Sonnet 5": "anthropic/claude-sonnet-5",
+        "Haiku 5.5": "anthropic/claude-haiku-5.5",
+    },
+    "Google": {
+        "Gemini 4 Argon": "google/gemini-4-argon",
+        "Gemini 3.8 Flash": "google/gemini-3.8-flash",
+        "Gemini 3.7 Flash": "google/gemini-3.7-flash",
+        "Gemini 3.5 Flash": "google/gemini-3.5-flash",
+        "Gemini 3.5 Flash Lite": "google/gemini-3.5-flash-lite",
+        "Gemini 3.1 Pro": "google/gemini-3.1-pro-preview",
+        "Gemini 3.1 Flash Lite": "google/gemini-3.1-flash-lite",
+        "Gemini 3.1 Flash Lite (preview)": "google/gemini-3.1-flash-lite-preview",
+        "Gemini 3 Flash": "google/gemini-3-flash-preview",
+        "Gemini 2.5 Pro": "google/gemini-2.5-pro",
+        "Gemini 2.5 Flash": "google/gemini-2.5-flash",
+    },
+    "xAI": {
+        "Grok 4.7": "x-ai/grok-4.7",
+        "Grok 4.6": "x-ai/grok-4.6",
+    },
+    "DeepSeek": {
+        "V4 Pro 0813": "deepseek/deepseek-v4-pro-0813",
+        "V4.1 Flash": "deepseek/deepseek-v4.1-flash",
+    },
+    "Qwen": {
+        "Qwen3.8 Max Prime": "qwen/qwen3.8-max-prime",
+        "Qwen3.8 Max (0902)": "qwen/qwen3.8-max-0902",
+        "Qwen3.8 Flash": "qwen/qwen3.8-flash",
+        "Qwen3.7 Max": "qwen/qwen3.7-max",
+        "Qwen3.6 Plus": "qwen/qwen3.6-plus",
+        "Qwen3.5 397B-A17B": "qwen/qwen3.5-397b-a17b",
+    },
+    "Z-AI": {
+        "GLM 5.3 Prime": "z-ai/glm-5.3-prime",
+        "GLM 5.3": "z-ai/glm-5.3",
+        "GLM 5.3 Flash": "z-ai/glm-5.3-flash",
+        "GLM 5.2": "z-ai/glm-5.2",
+    },
+    "Other providers": {
+        "Meta — Muse Wonder": "meta/muse-wonder",
+        "Meta — Muse Spark 1.3": "meta/muse-spark-1.3",
+        "Mistral — Large 4": "mistralai/mistral-large-4-0",
+        "Cohere — Command A+": "cohere/command-a-plus",
+        "Moonshot — Kimi K3": "moonshotai/kimi-k3",
+        "Moonshot — Kimi K2.6": "moonshotai/kimi-k2.6",
+        "MiniMax — M3": "minimax/minimax-m3",
+        "Xiaomi — MiMo V2.6 Pro": "xiaomi/mimo-v2.6-pro",
+        "StepFun — Step 5 Preview": "stepfun/step-5-preview",
+        "NVIDIA — Nemotron 3 Ultra": "nvidia/nemotron-3-ultra-550b-a55b",
+    },
+}
+
+# Streamlit positions a popover once, on open. When it opens above its field and
+# its height then changes, the bottom edge drifts; this pins it at its original gap.
+POPOVER_ANCHOR_JS = """
+<script>
+(function () {
+  if (window.__popoverAnchor) return;
+  window.__popoverAnchor = true;
+  const BODY = '[data-testid="stPopoverBody"]';
+  const TRIGGER = '[data-testid="stPopoverButton"]';
+
+  function track(body) {
+    body.__anchored = true;
+    let gap = null;     // -1 when opened below the field
+    let settled = 0;
+    let last = '';
+
+    const timer = setInterval(function tick() {
+      if (!body.isConnected) { clearInterval(timer); return; }
+      const trigger = document.querySelector(TRIGGER);
+      if (trigger) {
+        const top = trigger.getBoundingClientRect().top;
+        if (gap === null) {
+          const r = body.getBoundingClientRect();
+          const key = r.top + '|' + r.height;
+          settled = key === last ? settled + 1 : 0;
+          last = key;
+          if (settled >= 12) gap = r.bottom <= top + 2 ? top - r.bottom : -1;
+        } else if (gap >= 0) {
+          body.style.translate = 'none';
+          const natural = body.getBoundingClientRect().bottom;
+          body.style.translate = '0 ' + (top - gap - natural) + 'px';
+        }
+      }
+    }, 16);
+  }
+
+  new MutationObserver(() => {
+    const body = document.querySelector(BODY);
+    if (body && !body.__anchored) track(body);
+  }).observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+"""
+
+
+def select_model(provider: str, label: str):
+    st.session_state.model_choice = (provider, label)
+
+
+def model_picker():
+    """Model dropdown: a popover with one collapsible section per provider."""
+    provider, label = st.session_state.model_choice
+    st.markdown('<div class="field-label">Model</div>', unsafe_allow_html=True)
+    st.html(POPOVER_ANCHOR_JS, unsafe_allow_javascript=True)
+    # Re-keying on selection re-mounts the popover closed.
+    with st.popover(
+        f"{provider} · {label}",
+        use_container_width=True,
+        key=f"model_popover_{provider}_{label}",
+    ):
+        for group, models in MODEL_CATALOG.items():
+            if len(models) == 1:
+                (name,) = models
+                st.button(
+                    f"{group} · {name}",
+                    key=f"pick_{group}_{name}",
+                    type="primary" if (group, name) == (provider, label) else "secondary",
+                    use_container_width=True,
+                    on_click=select_model,
+                    args=(group, name),
+                )
+                continue
+            with st.expander(group, expanded=group == provider):
+                for name in models:
+                    st.button(
+                        name,
+                        key=f"pick_{group}_{name}",
+                        type="primary" if (group, name) == (provider, label) else "secondary",
+                        use_container_width=True,
+                        on_click=select_model,
+                        args=(group, name),
+                    )
 
 
 is_dark = st.session_state.theme == "dark"
@@ -433,6 +594,44 @@ hr, [data-testid="stDivider"] { border-color: var(--color-divider) !important; }
 [data-baseweb="popover"] li[aria-selected="true"] { background: var(--color-tag-bg) !important; }
 [data-baseweb="popover"] li:hover { background: var(--color-hover) !important; }
 
+/* Model picker */
+.field-label {
+    display: flex; align-items: center; min-height: 24px; margin: 0 0 4px;
+    font-size: 12px; color: var(--color-soft);
+}
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .field-label) { gap: 0 !important; }
+[data-testid="stMarkdownContainer"]:has(> .field-label) { margin-bottom: 0 !important; }
+[data-testid="stPopover"] { width: 100%; }
+[data-testid="stPopoverButton"] {
+    width: 100% !important; min-height: 40px !important; padding: 0 12px !important;
+    background: var(--color-surface) !important; border: 1px solid var(--color-divider) !important;
+    border-radius: var(--radius) !important; box-shadow: none !important;
+}
+[data-testid="stPopoverButton"]:hover { border-color: color-mix(in srgb, var(--color-text) 55%, transparent) !important; }
+[data-testid="stPopoverButton"] > div { display: flex; width: 100%; justify-content: space-between; align-items: center; }
+[data-testid="stPopoverButton"] > div > div:first-child { flex: 1; display: flex; justify-content: flex-start; }
+[data-testid="stPopoverButton"] p { font-size: 14px !important; font-weight: 400 !important; color: var(--color-text) !important; text-align: left !important; }
+[data-testid="stPopoverBody"] {
+    min-width: 340px; max-height: 60vh; overflow-y: auto; padding: 4px 0 !important;
+    background: var(--color-surface) !important; border: 1px solid var(--color-divider) !important;
+    border-radius: var(--radius) !important;
+}
+[data-testid="stPopoverBody"] [data-testid="stVerticalBlock"] { gap: 0 !important; }
+[data-testid="stPopoverBody"] [data-testid^="stBaseButton"] {
+    border: 0 !important; background: transparent !important; min-height: 32px !important;
+    padding: 4px 12px 4px 60px !important;
+}
+[data-testid="stPopoverBody"] > div > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] [data-testid^="stBaseButton"] { padding-left: 12px !important; }
+[data-testid="stPopoverBody"] [data-testid^="stBaseButton"] p { font-weight: 400 !important; font-size: 13px !important; }
+[data-testid="stPopoverBody"] [data-testid^="stBaseButton"]:hover:not(:disabled) { background: var(--color-hover) !important; }
+[data-testid="stPopoverBody"] [data-testid="stBaseButton-primary"] { background: var(--color-tag-bg) !important; }
+[data-testid="stPopoverBody"] [data-testid="stBaseButton-primary"] p { color: var(--color-tag-text) !important; font-weight: 600 !important; }
+[data-testid="stExpander"] details { border: 0 !important; border-radius: 0 !important; background: transparent !important; }
+[data-testid="stExpander"] summary { padding: 8px 12px !important; }
+[data-testid="stExpander"] summary p { font-weight: 600 !important; font-size: 13px !important; color: var(--color-text) !important; }
+[data-testid="stExpander"] summary:hover { background: var(--color-hover) !important; }
+[data-testid="stExpanderDetails"] { padding: 0 0 4px !important; }
+
 /* Radio → segmented control */
 [data-testid="stRadio"] [role="radiogroup"] {
     display: inline-flex !important; flex-direction: row !important; flex-wrap: nowrap !important;
@@ -697,12 +896,15 @@ elif current_step == 2:
             go_to(1)
             st.rerun()
     with col_r:
-        if st.button("Continue", type="primary", use_container_width=True, disabled=not jd_ok):
-            st.session_state.jd_text = job_description
-            st.session_state.jd_loaded = True
-            st.session_state.jd_source_name = jd_name
-            go_to(3)
-            st.rerun()
+        if st.button("Continue", type="primary", use_container_width=True):
+            if jd_ok:
+                st.session_state.jd_text = job_description
+                st.session_state.jd_loaded = True
+                st.session_state.jd_source_name = jd_name
+                go_to(3)
+                st.rerun()
+            else:
+                st.warning("Add a job description to continue.")
 
 # Step 3 — Review & generate
 elif current_step == 3:
@@ -745,72 +947,9 @@ elif current_step == 3:
             key="api_key_input",
         )
     with c2:
-        # Model IDs verified against openrouter.ai/api/v1/models (2026-10-15).
-        # Gemini entries use a Google AI Studio endpoint, which tailor_resume() pins for BYOK.
-        model_options = {
-            "Fusion": "openrouter/fusion",
-            "OpenAI — GPT-6.1 Sol Pro": "openai/gpt-6.1-sol-pro",
-            "OpenAI — GPT-6.1 Sol": "openai/gpt-6.1-sol",
-            "OpenAI — GPT-6 Astra Pro": "openai/gpt-6-astra-pro",
-            "OpenAI — GPT-6 Astra": "openai/gpt-6-astra",
-            "OpenAI — GPT-6 Luna Pro": "openai/gpt-6-luna-pro",
-            "OpenAI — GPT-6 Luna": "openai/gpt-6-luna",
-            "OpenAI — GPT-5.6 Terra": "openai/gpt-5.6-terra",
-            "OpenAI — GPT-5.5": "openai/gpt-5.5",
-            "Google — Gemini 4 Argon": "google/gemini-4-argon",
-            "Google — Gemini 3.8 Flash": "google/gemini-3.8-flash",
-            "Google — Gemini 3.7 Flash": "google/gemini-3.7-flash",
-            "Google — Gemini 3.5 Flash": "google/gemini-3.5-flash",
-            "Google — Gemini 3.5 Flash Lite": "google/gemini-3.5-flash-lite",
-            "Google — Gemini 3.1 Pro": "google/gemini-3.1-pro-preview",
-            "Google — Gemini 3.1 Flash Lite": "google/gemini-3.1-flash-lite",
-            "Google — Gemini 3 Flash": "google/gemini-3-flash-preview",
-            "Google — Gemini 3.1 Flash Lite (preview)": "google/gemini-3.1-flash-lite-preview",
-            "Google — Gemini 2.5 Pro": "google/gemini-2.5-pro",
-            "Google — Gemini 2.5 Flash": "google/gemini-2.5-flash",
-            "Anthropic — Claude Fable 5.1": "anthropic/claude-fable-5.1",
-            "Anthropic — Claude Fable 5": "anthropic/claude-fable-5",
-            "Anthropic — Claude Opus 5.5": "anthropic/claude-opus-5.5",
-            "Anthropic — Claude Opus 5": "anthropic/claude-opus-5",
-            "Anthropic — Claude Opus 4.8": "anthropic/claude-opus-4.8",
-            "Anthropic — Claude Opus 4.7": "anthropic/claude-opus-4.7",
-            "Anthropic — Claude Sonnet 5.5": "anthropic/claude-sonnet-5.5",
-            "Anthropic — Claude Sonnet 5": "anthropic/claude-sonnet-5",
-            "Anthropic — Claude Haiku 5.5": "anthropic/claude-haiku-5.5",
-            "xAI — Grok 4.7": "x-ai/grok-4.7",
-            "xAI — Grok 4.6": "x-ai/grok-4.6",
-            "Meta — Muse Wonder": "meta/muse-wonder",
-            "Meta — Muse Spark 1.3": "meta/muse-spark-1.3",
-            "Mistral — Mistral Large 4": "mistralai/mistral-large-4-0",
-            "Cohere — Command A+": "cohere/command-a-plus",
-            "DeepSeek — V4 Pro 0813": "deepseek/deepseek-v4-pro-0813",
-            "DeepSeek — V4.1 Flash": "deepseek/deepseek-v4.1-flash",
-            "Qwen — Qwen3.8 Max Prime": "qwen/qwen3.8-max-prime",
-            "Qwen — Qwen3.8 Max (0902)": "qwen/qwen3.8-max-0902",
-            "Qwen — Qwen3.8 Flash": "qwen/qwen3.8-flash",
-            "Qwen — Qwen3.7 Max": "qwen/qwen3.7-max",
-            "Qwen — Qwen3.6 Plus": "qwen/qwen3.6-plus",
-            "Qwen — Qwen3.5 397B-A17B": "qwen/qwen3.5-397b-a17b",
-            "Z-AI — GLM 5.3 Prime": "z-ai/glm-5.3-prime",
-            "Z-AI — GLM 5.3": "z-ai/glm-5.3",
-            "Z-AI — GLM 5.3 Flash": "z-ai/glm-5.3-flash",
-            "Z-AI — GLM-5.2": "z-ai/glm-5.2",
-            "Moonshot — Kimi K3": "moonshotai/kimi-k3",
-            "Moonshot — Kimi K2.6": "moonshotai/kimi-k2.6",
-            "MiniMax — M3": "minimax/minimax-m3",
-            "Xiaomi — MiMo V2.6 Pro": "xiaomi/mimo-v2.6-pro",
-            "StepFun — Step 5 Preview": "stepfun/step-5-preview",
-            "NVIDIA — Nemotron 3 Ultra": "nvidia/nemotron-3-ultra-550b-a55b",
-        }
-        if "selected_model" not in st.session_state:
-            st.session_state.selected_model = "Fusion"
-
-        selected_label = st.selectbox(
-            "Model",
-            options=list(model_options.keys()),
-            key="selected_model",
-        )
-        model = model_options[selected_label]
+        model_picker()
+        provider, model_label = st.session_state.model_choice
+        model = MODEL_CATALOG[provider][model_label]
 
     busy = st.session_state.job is not None
     col_l, col_r = st.columns([1, 1])
@@ -1023,18 +1162,21 @@ elif current_step == 4 and has_results:
         "Revise CV",
         type="primary",
         use_container_width=True,
-        disabled=not feedback.strip() or revising,
+        disabled=revising,
     ):
-        start_job(
-            "revise",
-            resume_text=st.session_state.resume_text,
-            job_description=st.session_state.jd_text,
-            api_key=st.session_state.get("used_api_key") or os.getenv("OPENROUTER_API_KEY", ""),
-            model=st.session_state.get("model_id", "openrouter/fusion"),
-            previous_cv=st.session_state.tailored_cv,
-            feedback=feedback.strip(),
-        )
-        st.rerun()
+        if not feedback.strip():
+            st.warning("Describe what to change first.")
+        else:
+            start_job(
+                "revise",
+                resume_text=st.session_state.resume_text,
+                job_description=st.session_state.jd_text,
+                api_key=st.session_state.get("used_api_key") or os.getenv("OPENROUTER_API_KEY", ""),
+                model=st.session_state.get("model_id", "openrouter/fusion"),
+                previous_cv=st.session_state.tailored_cv,
+                feedback=feedback.strip(),
+            )
+            st.rerun()
 
     if revising:
         job_status()
